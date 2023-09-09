@@ -24,7 +24,7 @@ func TestTicker(t *testing.T) {
 
 	// Lost ticks
 	for i := 0; i < 5; i++ {
-		f.Add(10 * time.Second)
+		f.Add(1000 * time.Second)
 		assert.Len(t, ticker.C, 1)
 		<-ticker.C
 	}

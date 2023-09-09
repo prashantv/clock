@@ -35,3 +35,11 @@ Is it useful to have the fake in a subpackage vs top-level package?
  * Separate package avoids mock implementation from being compiled into prod code
  * Separate package is cleaner if we want the mock to take additional dependencies (e.g., on `testing.TB`), without bringing 
    in a `testing` package dependency into prod code.
+
+### Reducing frequency on dropped ticks
+
+Putting a dropped ticker back in the queue to be scheduled next usually ends up losing the tick again anyway.
+Intead, ignore the period and use the next timer (or the end of the current `Add`).
+
+This approach avoids waking up repeatedly to drop ticks in `Add` and in a test of ~5k dropped ticks, it avoids
+~5s of sleeps (from the 1ms sleep for each iteration).
