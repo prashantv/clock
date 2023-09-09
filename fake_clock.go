@@ -196,11 +196,13 @@ func (m *Fake) removeWaiterLocked(w *waiter) bool {
 }
 
 func (m *Fake) processWaiterLocked(w *waiter, endTime time.Time) {
+	var dropped bool
 	m.mu.Unlock()
 	if w.c != nil {
 		select {
 		case w.c <- w.when:
 		default:
+			dropped = true
 			// Tickers drop ticks with slow receivers.
 		}
 	}
@@ -214,8 +216,29 @@ func (m *Fake) processWaiterLocked(w *waiter, endTime time.Time) {
 
 	if w.period > 0 {
 		w.when = m.cur.Add(w.period)
+
+		if dropped {
+			// Performance optimization for dropped tickers: If the dropped ticker is
+			// due next again, wait for another timer as re-running it in a tight loop
+			// will likely lead to more drops anyway.
+			nextRun := endTime
+			if t, ok := m.next(); ok {
+				nextRun = t
+			}
+			if nextRun.After(w.when) {
+				w.when = nextRun
+			}
+		}
 		m.addWaiterLocked(w)
 	}
+}
+
+func (m *Fake) next() (time.Time, bool) {
+	if len(m.waiters) == 0 {
+		return time.Time{}, false
+	}
+
+	return m.waiters[0].when, true
 }
 
 type waiters []*waiter
