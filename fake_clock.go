@@ -1,7 +1,7 @@
 package clock
 
 import (
-	"sort"
+	"container/heap"
 	"sync"
 	"time"
 )
@@ -158,13 +158,13 @@ func (f *Fake) Add(d time.Duration) {
 	endTime := f.cur.Add(d)
 
 	for len(f.waiters) > 0 {
+		// The next element to be removed is at index 0, peek.
 		w := f.waiters[0]
 		if w.when.After(endTime) {
 			break
 		}
 
-		f.waiters[0] = nil
-		f.waiters = f.waiters[1:]
+		heap.Pop(&f.waiters)
 
 		f.cur = w.when
 		f.processWaiterLocked(w, endTime)
@@ -174,9 +174,7 @@ func (f *Fake) Add(d time.Duration) {
 }
 
 func (f *Fake) addWaiterLocked(w *waiter) {
-	f.waiters = append(f.waiters, w)
-	w.selfIdx = len(f.waiters) - 1
-	sort.Sort(&f.waiters)
+	heap.Push(&f.waiters, w)
 }
 
 func (f *Fake) removeWaiter(w *waiter) bool {
@@ -192,13 +190,7 @@ func (f *Fake) removeWaiterLocked(w *waiter) bool {
 		return false
 	}
 
-	for i := w.selfIdx; i+1 < len(f.waiters); i++ {
-		f.waiters[i] = f.waiters[i+1]
-		f.waiters[i].selfIdx = i
-	}
-	f.waiters = f.waiters[:len(f.waiters)-1]
-
-	w.selfIdx = -1
+	heap.Remove(&f.waiters, w.selfIdx)
 	return true
 }
 
@@ -237,4 +229,21 @@ func (ws waiters) Swap(i, j int) {
 	ws[i], ws[j] = ws[j], ws[i]
 	ws[i].selfIdx = i
 	ws[j].selfIdx = j
+}
+
+func (ws *waiters) Push(x any) {
+	n := len(*ws)
+	item := x.(*waiter)
+	item.selfIdx = n
+	*ws = append(*ws, item)
+}
+
+func (ws *waiters) Pop() any {
+	old := *ws
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil    // avoid memory leak
+	item.selfIdx = -1 // for safety
+	*ws = old[:n-1]
+	return item
 }
