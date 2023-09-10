@@ -8,7 +8,7 @@ import (
 )
 
 func TestTicker(t *testing.T) {
-	f := NewFake()
+	f := NewFakeHeap()
 
 	ticker := f.Clock.Ticker(time.Second)
 

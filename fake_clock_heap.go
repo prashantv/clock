@@ -1,52 +1,41 @@
 package clock
 
 import (
-	"sort"
+	"container/heap"
 	"sync"
 	"time"
 )
 
-var _ core = (*Fake)(nil)
+var _ core = (*FakeHeap)(nil)
 
-// Fake is an implementation of Clock intended for testing.
-type Fake struct {
+// FakeHeap is an implementation of Clock intended for testing backed by a heap.
+type FakeHeap struct {
 	mu sync.Mutex
 
 	cur     time.Time
-	waiters waiters
+	waiters waiterHeap
 	Clock   Clock
 }
 
-type waiter struct {
-	selfIdx int // used to remove itself.
-
-	when   time.Time
-	period time.Duration
-
-	// Return indicates if the buffer was writtne to.
-	c  chan time.Time
-	fn func()
-}
-
-// NewFake returns a Clock that can be controlled by the Fake.
-func NewFake() *Fake {
-	f := &Fake{
+// NewFakeHeap returns a Clock that can be controlled by the Fake.
+func NewFakeHeap() *FakeHeap {
+	f := &FakeHeap{
 		cur: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC),
 	}
 	f.Clock = Clock{f}
 	return f
 }
 
-type fakeTicker struct {
-	f *Fake
+type fakeTicker2 struct {
+	f *FakeHeap
 	w *waiter
 }
 
-func (ft *fakeTicker) Stop() {
+func (ft *fakeTicker2) Stop() {
 	ft.f.removeWaiter(ft.w)
 }
 
-func (ft *fakeTicker) Reset(d time.Duration) {
+func (ft *fakeTicker2) Reset(d time.Duration) {
 	ft.f.mu.Lock()
 	defer ft.f.mu.Unlock()
 
@@ -56,16 +45,16 @@ func (ft *fakeTicker) Reset(d time.Duration) {
 	ft.f.addWaiterLocked(ft.w)
 }
 
-type fakeTimer struct {
-	f *Fake
+type fakeTimer2 struct {
+	f *FakeHeap
 	w *waiter
 }
 
-func (ft *fakeTimer) Stop() bool {
+func (ft *fakeTimer2) Stop() bool {
 	return ft.f.removeWaiter(ft.w)
 }
 
-func (ft *fakeTimer) Reset(d time.Duration) bool {
+func (ft *fakeTimer2) Reset(d time.Duration) bool {
 	ft.f.mu.Lock()
 	defer ft.f.mu.Unlock()
 
@@ -78,7 +67,7 @@ func (ft *fakeTimer) Reset(d time.Duration) bool {
 
 // Ticker returns a new Ticker containing a channel that sends the current mock time.
 // The ticker will drop tickets to make up for slow receivers.
-func (f *Fake) ticker(d time.Duration) *Ticker {
+func (f *FakeHeap) ticker(d time.Duration) *Ticker {
 	if d <= 0 {
 		panic("non-positive interval for NewTicker")
 	}
@@ -96,11 +85,11 @@ func (f *Fake) ticker(d time.Duration) *Ticker {
 
 	return &Ticker{
 		C:    c,
-		impl: &fakeTicker{f, w},
+		impl: &fakeTicker2{f, w},
 	}
 }
 
-func (f *Fake) timer(d time.Duration) *Timer {
+func (f *FakeHeap) timer(d time.Duration) *Timer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -113,11 +102,11 @@ func (f *Fake) timer(d time.Duration) *Timer {
 
 	return &Timer{
 		C:    c,
-		impl: &fakeTimer{f, w},
+		impl: &fakeTimer2{f, w},
 	}
 }
 
-func (f *Fake) afterFunc(d time.Duration, fn func()) *Timer {
+func (f *FakeHeap) afterFunc(d time.Duration, fn func()) *Timer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -128,23 +117,23 @@ func (f *Fake) afterFunc(d time.Duration, fn func()) *Timer {
 	f.addWaiterLocked(w)
 
 	return &Timer{
-		impl: &fakeTimer{f, w},
+		impl: &fakeTimer2{f, w},
 	}
 }
 
-func (f *Fake) now() time.Time {
+func (f *FakeHeap) now() time.Time {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	return f.cur
 }
 
-func (f *Fake) sleep(d time.Duration) {
+func (f *FakeHeap) sleep(d time.Duration) {
 	<-f.timer(d).C
 }
 
 // Add updates the time.
-func (m *Fake) Add(d time.Duration) {
+func (m *FakeHeap) Add(d time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -156,8 +145,10 @@ func (m *Fake) Add(d time.Duration) {
 			break
 		}
 
-		m.waiters[0] = nil
-		m.waiters = m.waiters[1:]
+		i := heap.Pop(&m.waiters)
+		if i.(*waiter) != w {
+			panic("wtf")
+		}
 
 		m.cur = w.when
 		m.processWaiterLocked(w, endTime)
@@ -166,36 +157,28 @@ func (m *Fake) Add(d time.Duration) {
 	m.cur = endTime
 }
 
-func (m *Fake) addWaiterLocked(w *waiter) {
-	m.waiters = append(m.waiters, w)
-	w.selfIdx = len(m.waiters) - 1
-	sort.Sort(m.waiters)
+func (m *FakeHeap) addWaiterLocked(w *waiter) {
+	heap.Push(&m.waiters, w)
 }
 
-func (m *Fake) removeWaiter(w *waiter) bool {
+func (m *FakeHeap) removeWaiter(w *waiter) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	return m.removeWaiterLocked(w)
 }
 
-func (m *Fake) removeWaiterLocked(w *waiter) bool {
+func (m *FakeHeap) removeWaiterLocked(w *waiter) bool {
 	// Already removed.
 	if w.selfIdx == -1 {
 		return false
 	}
 
-	for i := w.selfIdx; i+1 < len(m.waiters); i++ {
-		m.waiters[i] = m.waiters[i+1]
-		m.waiters[i].selfIdx = i
-	}
-	m.waiters = m.waiters[:len(m.waiters)-1]
-
-	w.selfIdx = -1
+	heap.Remove(&m.waiters, w.selfIdx)
 	return true
 }
 
-func (m *Fake) processWaiterLocked(w *waiter, endTime time.Time) {
+func (m *FakeHeap) processWaiterLocked(w *waiter, endTime time.Time) {
 	m.mu.Unlock()
 	if w.c != nil {
 		select {
@@ -218,16 +201,33 @@ func (m *Fake) processWaiterLocked(w *waiter, endTime time.Time) {
 	}
 }
 
-type waiters []*waiter
+type waiterHeap []*waiter
 
-func (ws waiters) Len() int {
-	return len(ws)
+func (wh waiterHeap) Len() int {
+	return len(wh)
 }
-func (ws waiters) Less(i, j int) bool {
-	return ws[i].when.Before(ws[j].when)
+func (wh waiterHeap) Less(i, j int) bool {
+	return wh[i].when.Before(wh[j].when)
 }
-func (ws waiters) Swap(i, j int) {
-	ws[i], ws[j] = ws[j], ws[i]
-	ws[i].selfIdx = i
-	ws[j].selfIdx = j
+func (wh waiterHeap) Swap(i, j int) {
+	wh[i], wh[j] = wh[j], wh[i]
+	wh[i].selfIdx = i
+	wh[j].selfIdx = j
+}
+
+func (wh *waiterHeap) Push(x any) {
+	n := len(*wh)
+	item := x.(*waiter)
+	item.selfIdx = n
+	*wh = append(*wh, item)
+}
+
+func (wh *waiterHeap) Pop() any {
+	old := *wh
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil    // avoid memory leak
+	item.selfIdx = -1 // for safety
+	*wh = old[:n-1]
+	return item
 }
