@@ -19,6 +19,10 @@ type Fake struct {
 	Clock   Clock
 
 	waitForCond sync.Cond
+
+	// These variables are purely used to detect racy uses of a clock.
+	raceDetectClockOpAndRace bool
+	raceDetectAddAndWait     bool
 }
 
 // Waiter represents a specific caller of a Clock operation that requires waiting for time.
@@ -102,6 +106,8 @@ func (f *Fake) ticker(d time.Duration) *Ticker {
 		panic("non-positive interval for NewTicker")
 	}
 
+	_ = f.raceDetectClockOpAndRace
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -123,6 +129,8 @@ func (f *Fake) ticker(d time.Duration) *Ticker {
 }
 
 func (f *Fake) timer(d time.Duration) *Timer {
+	_ = f.raceDetectClockOpAndRace
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -143,6 +151,8 @@ func (f *Fake) timer(d time.Duration) *Timer {
 }
 
 func (f *Fake) afterFunc(d time.Duration, fn func()) *Timer {
+	_ = f.raceDetectClockOpAndRace
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -158,6 +168,8 @@ func (f *Fake) afterFunc(d time.Duration, fn func()) *Timer {
 }
 
 func (f *Fake) now() time.Time {
+	_ = f.raceDetectClockOpAndRace
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -165,6 +177,8 @@ func (f *Fake) now() time.Time {
 }
 
 func (f *Fake) sleep(d time.Duration) {
+	_ = f.raceDetectClockOpAndRace
+
 	// TODO: What is the behaviour of zero or negative sleeps?
 	// The real clock returns immediately, but callers may want to block these, perhaps an option.
 	<-f.timer(d).C
@@ -172,6 +186,9 @@ func (f *Fake) sleep(d time.Duration) {
 
 // Add updates the time.
 func (f *Fake) Add(d time.Duration) {
+	f.raceDetectClockOpAndRace = true
+	f.raceDetectAddAndWait = true
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
