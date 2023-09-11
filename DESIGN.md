@@ -35,3 +35,10 @@ Is it useful to have the fake in a subpackage vs top-level package?
  * Separate package avoids mock implementation from being compiled into prod code
  * Separate package is cleaner if we want the mock to take additional dependencies (e.g., on `testing.TB`), without bringing 
    in a `testing` package dependency into prod code.
+
+
+### (To implement) Detect races
+
+A common issue with tests using fake clocks is that they forget to wait for a ticker/timer before advancing the fake time.
+We should be able to take advantage of the race detector to detect these as the ticker/timer will usually happen in
+a background goroutine while the test goroutine advances the clock.
