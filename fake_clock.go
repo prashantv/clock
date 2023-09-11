@@ -10,6 +10,8 @@ var _ core = (*Fake)(nil)
 
 // Fake is an implementation of Clock intended for testing.
 type Fake struct {
+	opts fakeOptions
+
 	mu sync.Mutex
 
 	cur     time.Time
@@ -29,10 +31,15 @@ type waiter struct {
 }
 
 // NewFake returns a Clock that can be controlled by the Fake.
-func NewFake() *Fake {
+func NewFake(opts ...FakeOption) *Fake {
 	f := &Fake{
 		cur: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC),
 	}
+	f.opts.setDefaults()
+	for _, opt := range opts {
+		opt.apply(&f.opts)
+	}
+
 	f.Clock = Clock{f}
 	return f
 }
@@ -209,7 +216,7 @@ func (f *Fake) processWaiterLocked(w *waiter, endTime time.Time) {
 	}
 
 	// best-effort run background stuff
-	time.Sleep(time.Millisecond)
+	f.opts.scheduleAwaken(w.when)
 	f.mu.Lock()
 
 	if w.period > 0 {
