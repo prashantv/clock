@@ -27,6 +27,17 @@ This also allows new methods to be added to the Timer/Ticker without requiring a
 
 ## Fake clock
 
+### Waiting for clock callers
+
+Many tests using fake clocks are prone to misuse by not waiting for the clock caller before adding time.
+E.g., if a clock is used to advance past a `Sleep`, the sleep must happen from a background goroutine
+to the test. Without a wait mechanism provided by the fake, a caller cannot be sure whether the `Sleep` has
+been reached before calling `Add`.
+
+The wait mechanism allows waiting for specific Clock operations, but also allows for more complex matching
+such as waiting on the specific delay, or in the future, a specific caller.
+
+
 ### TBD: Separate package
 
 Is it useful to have the fake in a subpackage vs top-level package?

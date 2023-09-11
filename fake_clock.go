@@ -17,15 +17,25 @@ type Fake struct {
 	cur     time.Time
 	waiters waiters
 	Clock   Clock
+
+	waitForCond sync.Cond
 }
 
-type waiter struct {
+// Waiter represents a specific caller of a Clock operation that requires waiting for time.
+type Waiter struct {
+	// Op is the Clock operation used to create this waiter, e.g., Ticker.
+	Op Operation
+
+	// Delay is the period passed as part of the Clock operation.
+	Delay time.Duration
+
+	// Internal fields
 	selfIdx int // used to remove itself.
 
 	when   time.Time
 	period time.Duration
 
-	// Return indicates if the buffer was writtne to.
+	// Triggers for the waiter.
 	c  chan time.Time
 	fn func()
 }
@@ -35,6 +45,8 @@ func NewFake(opts ...FakeOption) *Fake {
 	f := &Fake{
 		cur: time.Date(2000, 1, 2, 3, 4, 5, 6, time.UTC),
 	}
+
+	f.waitForCond.L = &f.mu
 	f.opts.setDefaults()
 	for _, opt := range opts {
 		opt.apply(&f.opts)
@@ -46,7 +58,7 @@ func NewFake(opts ...FakeOption) *Fake {
 
 type fakeTicker struct {
 	f *Fake
-	w *waiter
+	w *Waiter
 }
 
 func (ft *fakeTicker) Stop() {
@@ -65,7 +77,7 @@ func (ft *fakeTicker) Reset(d time.Duration) {
 
 type fakeTimer struct {
 	f *Fake
-	w *waiter
+	w *Waiter
 }
 
 func (ft *fakeTimer) Stop() bool {
@@ -94,7 +106,10 @@ func (f *Fake) ticker(d time.Duration) *Ticker {
 	defer f.mu.Unlock()
 
 	c := make(chan time.Time, 1) // buffer matches time.Ticker.
-	w := &waiter{
+	w := &Waiter{
+		Op:    OpTicker,
+		Delay: d,
+
 		when:   f.cur.Add(d),
 		period: d,
 		c:      c,
@@ -112,7 +127,10 @@ func (f *Fake) timer(d time.Duration) *Timer {
 	defer f.mu.Unlock()
 
 	c := make(chan time.Time, 1) // buffer matches time.Ticker.
-	w := &waiter{
+	w := &Waiter{
+		Op:    OpTimer,
+		Delay: d,
+
 		when: f.cur.Add(d),
 		c:    c,
 	}
@@ -128,7 +146,7 @@ func (f *Fake) afterFunc(d time.Duration, fn func()) *Timer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	w := &waiter{
+	w := &Waiter{
 		when: f.cur.Add(d),
 		fn:   fn,
 	}
@@ -147,6 +165,8 @@ func (f *Fake) now() time.Time {
 }
 
 func (f *Fake) sleep(d time.Duration) {
+	// TODO: What is the behaviour of zero or negative sleeps?
+	// The real clock returns immediately, but callers may want to block these, perhaps an option.
 	<-f.timer(d).C
 }
 
@@ -173,18 +193,21 @@ func (f *Fake) Add(d time.Duration) {
 	f.cur = endTime
 }
 
-func (f *Fake) addWaiterLocked(w *waiter) {
+func (f *Fake) addWaiterLocked(w *Waiter) {
 	heap.Push(&f.waiters, w)
+
+	// If there's any waiters, notify them of the new waiter.
+	f.waitForCond.Broadcast()
 }
 
-func (f *Fake) removeWaiter(w *waiter) bool {
+func (f *Fake) removeWaiter(w *Waiter) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	return f.removeWaiterLocked(w)
 }
 
-func (f *Fake) removeWaiterLocked(w *waiter) bool {
+func (f *Fake) removeWaiterLocked(w *Waiter) bool {
 	// Already removed.
 	if w.selfIdx == -1 {
 		return false
@@ -194,7 +217,7 @@ func (f *Fake) removeWaiterLocked(w *waiter) bool {
 	return true
 }
 
-func (f *Fake) processWaiterLocked(w *waiter, endTime time.Time) {
+func (f *Fake) processWaiterLocked(w *Waiter, endTime time.Time) {
 	f.mu.Unlock()
 	if w.c != nil {
 		select {
@@ -217,7 +240,7 @@ func (f *Fake) processWaiterLocked(w *waiter, endTime time.Time) {
 	}
 }
 
-type waiters []*waiter
+type waiters []*Waiter
 
 func (ws waiters) Len() int {
 	return len(ws)
@@ -233,7 +256,7 @@ func (ws waiters) Swap(i, j int) {
 
 func (ws *waiters) Push(x any) {
 	n := len(*ws)
-	item := x.(*waiter)
+	item := x.(*Waiter)
 	item.selfIdx = n
 	*ws = append(*ws, item)
 }
