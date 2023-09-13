@@ -12,7 +12,7 @@ type Clock struct {
 
 // Now returns the current time.
 func (c Clock) Now() time.Time {
-	return c.Now()
+	return c.core.now()
 }
 
 // Sleep pauses the current goroutine for at least the duration d.
